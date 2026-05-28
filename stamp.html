@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FENICE スタンプカード</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Helvetica Neue', sans-serif; background: #f5f5f5; }
+    .container { max-width: 390px; margin: 0 auto; padding: 24px 16px; }
+    .logo { text-align: center; margin-bottom: 24px; }
+    .logo h1 { font-size: 28px; letter-spacing: 4px; color: #1a1a1a; }
+    .card { background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 16px; }
+    .name { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+    .store { font-size: 13px; color: #888; }
+    .stamp-title { font-size: 14px; font-weight: 600; color: #555; margin-bottom: 16px; }
+    .stamps { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 16px; }
+    .stamp { width: 100%; aspect-ratio: 1; border-radius: 50%; background: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+    .stamp.filled { background: #1a1a1a; }
+    .progress { font-size: 13px; color: #888; text-align: center; margin-bottom: 8px; }
+    .reward { background: #f9f5f0; border-radius: 12px; padding: 16px; text-align: center; }
+    .reward h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .reward p { font-size: 12px; color: #888; }
+    .history { margin-top: 8px; }
+    .history-item { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+    .history-item:last-child { border-bottom: none; }
+    .loading { text-align: center; padding: 60px 20px; color: #888; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="logo">
+    <h1>FENICE</h1>
+  </div>
+
+  <div id="loading" class="loading">読み込み中...</div>
+
+  <div id="content" style="display:none">
+    <div class="card">
+      <div class="name" id="customerName"></div>
+      <div class="store" id="customerStore"></div>
+    </div>
+
+    <div class="card">
+      <div class="stamp-title">スタンプカード</div>
+      <div class="stamps" id="stampGrid"></div>
+      <div class="progress" id="progressText"></div>
+      <div class="reward" id="rewardInfo"></div>
+    </div>
+
+    <div class="card">
+      <div class="stamp-title">来店履歴</div>
+      <div class="history" id="historyList"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const SUPABASE_URL = 'https://nwjegiadertslklnjpvq.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_GWrE0p2OJFQMsrjhczccAQ_-PejRNgG';
+  const LIFF_ID = '2010200004-xaRYElXt';
+
+  const { createClient } = supabase;
+  const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  async function init() {
+    await liff.init({ liffId: LIFF_ID });
+    if (!liff.isLoggedIn()) { liff.login(); return; }
+    const profile = await liff.getProfile();
+    const lineUserId = profile.userId;
+
+    const { data: customer } = await db
+      .from('customers')
+      .select('*, stores(name)')
+      .eq('id', lineUserId)
+      .single();
+
+    if (!customer) {
+      document.getElementById('loading').textContent = '会員登録が必要です';
+      return;
+    }
+
+    document.getElementById('customerName').textContent = customer.name + ' さん';
+    document.getElementById('customerStore').textContent = customer.stores?.name || '';
+
+    const { data: visits } = await db
+      .from('visits')
+      .select('*, stores(name)')
+      .eq('customer_id', lineUserId)
+      .order('visited_at', { ascending: false });
+
+    const stampCount = visits?.length || 0;
+
+    const { data: reward } = await db
+      .from('store_rewards')
+      .select('*')
+      .eq('store_id', customer.store_id)
+      .eq('is_active', true)
+      .single();
+
+    const threshold = reward?.stamp_threshold || 10;
+    const current = stampCount % threshold;
+    const grid = document.getElementById('stampGrid');
+
+    for (let i = 0; i < threshold; i++) {
+      const div = document.createElement('div');
+      div.className = 'stamp' + (i < current ? ' filled' : '');
+      div.textContent = i < current ? '★' : '☆';
+      grid.appendChild(div);
+    }
+
+    document.getElementById('progressText').textContent =
+      current + ' / ' + threshold + ' スタンプ';
+
+    document.getElementById('rewardInfo').innerHTML =
+      '<h3>特典：' + (reward?.reward_name || '') + '</h3>' +
+      '<p>あと ' + (threshold - current) + ' 回で獲得！</p>';
+
+    const historyList = document.getElementById('historyList');
+    if (!visits || visits.length === 0) {
+      historyList.innerHTML = '<div class="history-item">来店履歴がありません</div>';
+    } else {
+      visits.slice(0, 10).forEach(v => {
+        const date = new Date(v.visited_at);
+        const str = date.getFullYear() + '/' +
+          String(date.getMonth()+1).padStart(2,'0') + '/' +
+          String(date.getDate()).padStart(2,'0');
+        const div = document.createElement('div');
+        div.className = 'history-item';
+        div.innerHTML = '<span>' + str + '</span><span>' + (v.stores?.name || '') + '</span>';
+        historyList.appendChild(div);
+      });
+    }
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('content').style.display = 'block';
+  }
+
+  init();
+</script>
+</body>
+</html>
