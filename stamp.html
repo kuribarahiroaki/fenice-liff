@@ -70,6 +70,9 @@
     document.getElementById('loading').textContent = 'LIFF初期化完了';
     if (!liff.isLoggedIn()) { liff.login(); return; }
     const profile = await liff.getProfile();
+    document.getElementById('loading').textContent = 'ユーザーID取得:' + profile.userId;
+    if (!liff.isLoggedIn()) { liff.login(); return; }
+    const profile = await liff.getProfile();
     const lineUserId = profile.userId;
 
     const { data: customer } = await db
