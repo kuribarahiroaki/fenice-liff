@@ -34,29 +34,24 @@
   <div class="logo">
     <h1>FENICE</h1>
   </div>
-
   <div id="loading" class="loading">読み込み中...</div>
-
   <div id="content" style="display:none">
     <div class="card">
       <div class="name" id="customerName"></div>
       <div class="store" id="customerStore"></div>
     </div>
-
     <div class="card">
       <div class="stamp-title">スタンプカード</div>
       <div class="stamps" id="stampGrid"></div>
       <div class="progress" id="progressText"></div>
       <div class="reward" id="rewardInfo"></div>
     </div>
-
     <div class="card">
       <div class="stamp-title">来店履歴</div>
       <div class="history" id="historyList"></div>
     </div>
   </div>
 </div>
-
 <script>
   const SUPABASE_URL = 'https://nwjegiadertslklnjpvq.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_GWrE0p2OJFQMsrjhczccAQ_-PejRNgG';
@@ -66,80 +61,83 @@
   const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
   async function init() {
-    await liff.init({ liffId: LIFF_ID });
-    document.getElementById('loading').textContent = 'LIFF初期化完了';
-    if (!liff.isLoggedIn()) { liff.login(); return; }
-    const profile = await liff.getProfile();
-    document.getElementById('loading').textContent = 'ユーザーID取得:' + profile.userId;
-    if (!liff.isLoggedIn()) { liff.login(); return; }
-    const profile = await liff.getProfile();
-    const lineUserId = profile.userId;
+    try {
+      document.getElementById('loading').textContent = '初期化中...';
+      await liff.init({ liffId: LIFF_ID });
+      document.getElementById('loading').textContent = 'ログイン確認中...';
+      if (!liff.isLoggedIn()) { liff.login(); return; }
+      document.getElementById('loading').textContent = 'プロフィール取得中...';
+      const profile = await liff.getProfile();
+      const lineUserId = profile.userId;
+      document.getElementById('loading').textContent = 'データ取得中...' + lineUserId;
 
-    const { data: customer } = await db
-      .from('customers')
-      .select('*, stores(name)')
-      .eq('id', lineUserId)
-      .single();
+      const { data: customer, error: customerError } = await db
+        .from('customers')
+        .select('*, stores(name)')
+        .eq('id', lineUserId)
+        .single();
 
-  if (!customer) {
-      document.getElementById('loading').textContent = '会員登録が必要です。ID:' + lineUserId;
-      return;
-    }
+      if (customerError || !customer) {
+        document.getElementById('loading').textContent = '会員登録が必要です。ID:' + lineUserId;
+        return;
+      }
 
-    document.getElementById('customerName').textContent = customer.name + ' さん';
-    document.getElementById('customerStore').textContent = customer.stores?.name || '';
+      document.getElementById('customerName').textContent = customer.name + ' さん';
+      document.getElementById('customerStore').textContent = customer.stores?.name || '';
 
-    const { data: visits } = await db
-      .from('visits')
-      .select('*, stores(name)')
-      .eq('customer_id', lineUserId)
-      .order('visited_at', { ascending: false });
+      const { data: visits } = await db
+        .from('visits')
+        .select('*, stores(name)')
+        .eq('customer_id', lineUserId)
+        .order('visited_at', { ascending: false });
 
-    const stampCount = visits?.length || 0;
+      const stampCount = visits?.length || 0;
 
-    const { data: reward } = await db
-      .from('store_rewards')
-      .select('*')
-      .eq('store_id', customer.store_id)
-      .eq('is_active', true)
-      .single();
+      const { data: reward } = await db
+        .from('store_rewards')
+        .select('*')
+        .eq('store_id', customer.store_id)
+        .eq('is_active', true)
+        .single();
 
-    const threshold = reward?.stamp_threshold || 10;
-    const current = stampCount % threshold;
-    const grid = document.getElementById('stampGrid');
+      const threshold = reward?.stamp_threshold || 10;
+      const current = stampCount % threshold;
+      const grid = document.getElementById('stampGrid');
 
-    for (let i = 0; i < threshold; i++) {
-      const div = document.createElement('div');
-      div.className = 'stamp' + (i < current ? ' filled' : '');
-      div.textContent = i < current ? '★' : '☆';
-      grid.appendChild(div);
-    }
-
-    document.getElementById('progressText').textContent =
-      current + ' / ' + threshold + ' スタンプ';
-
-    document.getElementById('rewardInfo').innerHTML =
-      '<h3>特典：' + (reward?.reward_name || '') + '</h3>' +
-      '<p>あと ' + (threshold - current) + ' 回で獲得！</p>';
-
-    const historyList = document.getElementById('historyList');
-    if (!visits || visits.length === 0) {
-      historyList.innerHTML = '<div class="history-item">来店履歴がありません</div>';
-    } else {
-      visits.slice(0, 10).forEach(v => {
-        const date = new Date(v.visited_at);
-        const str = date.getFullYear() + '/' +
-          String(date.getMonth()+1).padStart(2,'0') + '/' +
-          String(date.getDate()).padStart(2,'0');
+      for (let i = 0; i < threshold; i++) {
         const div = document.createElement('div');
-        div.className = 'history-item';
-        div.innerHTML = '<span>' + str + '</span><span>' + (v.stores?.name || '') + '</span>';
-        historyList.appendChild(div);
-      });
-    }
+        div.className = 'stamp' + (i < current ? ' filled' : '');
+        div.textContent = i < current ? '★' : '☆';
+        grid.appendChild(div);
+      }
 
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('content').style.display = 'block';
+      document.getElementById('progressText').textContent = current + ' / ' + threshold + ' スタンプ';
+      document.getElementById('rewardInfo').innerHTML =
+        '<h3>特典：' + (reward?.reward_name || '') + '</h3>' +
+        '<p>あと ' + (threshold - current) + ' 回で獲得！</p>';
+
+      const historyList = document.getElementById('historyList');
+      if (!visits || visits.length === 0) {
+        historyList.innerHTML = '<div class="history-item">来店履歴がありません</div>';
+      } else {
+        visits.slice(0, 10).forEach(v => {
+          const date = new Date(v.visited_at);
+          const str = date.getFullYear() + '/' +
+            String(date.getMonth()+1).padStart(2,'0') + '/' +
+            String(date.getDate()).padStart(2,'0');
+          const div = document.createElement('div');
+          div.className = 'history-item';
+          div.innerHTML = '<span>' + str + '</span><span>' + (v.stores?.name || '') + '</span>';
+          historyList.appendChild(div);
+        });
+      }
+
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('content').style.display = 'block';
+
+    } catch(e) {
+      document.getElementById('loading').textContent = 'エラー:' + e.message;
+    }
   }
 
   init();
