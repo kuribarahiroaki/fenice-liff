@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FENICE 来店チェックイン</title>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Helvetica Neue', sans-serif; background: #f5f5f5; }
+    .container { max-width: 390px; margin: 0 auto; padding: 24px 16px; }
+    .logo { text-align: center; margin-bottom: 32px; }
+    .logo h1 { font-size: 28px; letter-spacing: 4px; color: #1a1a1a; }
+    .logo p { font-size: 12px; color: #888; margin-top: 4px; }
+    .card { background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 16px; }
+    .loading { text-align: center; padding: 60px 20px; color: #888; font-size: 14px; }
+    .result { text-align: center; padding: 40px 20px; }
+    .result .icon { font-size: 72px; margin-bottom: 16px; }
+    .result h2 { font-size: 22px; font-weight: 700; margin-bottom: 8px; color: #1a1a1a; }
+    .result p { color: #888; font-size: 14px; line-height: 1.6; }
+    .stamp-summary { margin-top: 24px; background: #f9f5f0; border-radius: 12px; padding: 16px; }
+    .stamp-summary .label { font-size: 12px; color: #888; margin-bottom: 8px; }
+    .stamps { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 10px; }
+    .stamp { width: 36px; height: 36px; border-radius: 50%; background: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+    .stamp.filled { background: #1a1a1a; }
+    .stamp-count { font-size: 13px; color: #555; font-weight: 600; }
+    .reward-msg { margin-top: 8px; font-size: 12px; color: #888; }
+    .error { color: #c0392b; }
+    .btn { display: block; width: 100%; padding: 14px; background: #1a1a1a; color: white; border: none; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 20px; text-align: center; text-decoration: none; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="logo">
+    <h1>FENICE</h1>
+    <p>来店チェックイン</p>
+  </div>
+
+  <div id="loading" class="loading">読み込み中...</div>
+
+  <div id="content" style="display:none">
+    <div class="card">
+      <div class="result" id="resultView"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const SUPABASE_URL = 'https://nwjegiadertslklnjpvq.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_GWrE0p2OJFQMsrjhczccAQ_-PejRNgG';
+  const LIFF_ID = '2010200004-y5OjJ1IE';
+
+  const { createClient } = supabase;
+  const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  function show(html) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('content').style.display = 'block';
+    document.getElementById('resultView').innerHTML = html;
+  }
+
+  async function init() {
+    try {
+      await liff.init({ liffId: LIFF_ID });
+      if (!liff.isLoggedIn()) { liff.login(); return; }
+
+      const profile = await liff.getProfile();
+      const lineUserId = profile.userId;
+
+      const params = new URLSearchParams(window.location.search);
+      const storeId = params.get('store');
+
+      if (!storeId) {
+        show(`<div class="icon">⚠️</div>
+              <h2>QRコードが無効です</h2>
+              <p class="error">店舗情報が取得できませんでした。<br>正しいQRコードをスキャンしてください。</p>`);
+        return;
+      }
+
+      // 会員確認
+      const { data: customer, error: customerError } = await db
+        .from('customers')
+        .select('*, stores(name)')
+        .eq('id', lineUserId)
+        .single();
+
+      if (customerError || !customer) {
+        show(`<div class="icon">📋</div>
+              <h2>会員登録が必要です</h2>
+              <p>チェックインには会員登録が必要です。<br>まず会員登録をお済ませください。</p>
+              <a class="btn" href="index.html?store=${storeId}">会員登録へ</a>`);
+        return;
+      }
+
+      // 当日の重複チェックイン防止
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: todayVisit } = await db
+        .from('visits')
+        .select('id')
+        .eq('customer_id', lineUserId)
+        .gte('visited_at', today + 'T00:00:00')
+        .lte('visited_at', today + 'T23:59:59')
+        .maybeSingle();
+
+      if (todayVisit) {
+        const { data: visits } = await db
+          .from('visits')
+          .select('id')
+          .eq('customer_id', lineUserId);
+        await showStampResult(customer, visits?.length || 0, false);
+        return;
+      }
+
+      // 来店記録を保存
+      const { error: visitError } = await db
+        .from('visits')
+        .insert({ customer_id: lineUserId, store_id: storeId });
+
+      if (visitError) {
+        show(`<div class="icon">❌</div>
+              <h2>エラーが発生しました</h2>
+              <p class="error">チェックインに失敗しました。<br>もう一度お試しください。</p>`);
+        return;
+      }
+
+      const { data: visits } = await db
+        .from('visits')
+        .select('id')
+        .eq('customer_id', lineUserId);
+
+      await showStampResult(customer, visits?.length || 0, true);
+
+    } catch (e) {
+      show(`<div class="icon">❌</div>
+            <h2>エラーが発生しました</h2>
+            <p class="error">${e.message}</p>`);
+    }
+  }
+
+  async function showStampResult(customer, stampCount, isNew) {
+    const { data: reward } = await db
+      .from('store_rewards')
+      .select('*')
+      .eq('store_id', customer.store_id)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    const threshold = reward?.stamp_threshold || 10;
+    const current = stampCount % threshold;
+    const remaining = threshold - current;
+
+    let stampsHtml = '';
+    for (let i = 0; i < threshold; i++) {
+      stampsHtml += `<div class="stamp${i < current ? ' filled' : ''}">${i < current ? '★' : '☆'}</div>`;
+    }
+
+    const rewardMsg = remaining === 0
+      ? `🎉 特典「${reward?.reward_name || ''}」獲得！スタッフにお声がけください`
+      : `あと <strong>${remaining}</strong> 回で「${reward?.reward_name || '特典'}」獲得！`;
+
+    show(`
+      <div class="icon">${isNew ? '✅' : '📅'}</div>
+      <h2>${isNew ? 'チェックイン完了！' : '本日チェックイン済み'}</h2>
+      <p>${customer.name} さん<br>${isNew ? 'スタンプが1枚押されました' : '本日はすでにチェックイン済みです'}</p>
+      <div class="stamp-summary">
+        <div class="label">現在のスタンプ</div>
+        <div class="stamps">${stampsHtml}</div>
+        <div class="stamp-count">${current} / ${threshold} スタンプ</div>
+        <div class="reward-msg">${rewardMsg}</div>
+      </div>
+    `);
+  }
+
+  init();
+</script>
+</body>
+</html>
